@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Training artifacts (large, reproducible)
+out/
+*.pt
+model_int8.bin
+data/train.bin
+data/val.bin
+
+# Stale distribution copy
+tinychat-esp32.zip
+
+# Embedded tooling
+.pio/
+esp32/.pio/
+esp32/.vscode/
+
+# OS
+.DS_Store
