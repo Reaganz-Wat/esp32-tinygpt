@@ -1,27 +1,30 @@
 # tinychat-esp32
 
-Train a tiny Llama-style transformer in PyTorch, export it to an int8 file, and
-run it on an ESP32-S3.
+A tiny Llama-style language model you can train on a laptop, export to int8,
+and run on an ESP32-S3.
 
 The model is deliberately small: RMSNorm, RoPE, SwiGLU, grouped-query
 attention, tied embeddings, and no biases. Its tensor layout matches
 [llama2.c](https://github.com/karpathy/llama2.c), so the PyTorch model and the
 on-device C engine run the same forward pass.
 
-## What is in the box
+## Highlights
 
-- `model.py` — the transformer, including a KV-cache `decode_step` that mirrors the C engine.
-- `prepare_data.py` — SentencePiece BPE tokenizer, `train.bin`, `val.bin`, and `tokenizer.bin`.
-- `train.py` — validation, best checkpoint, resume, cosine LR, early stopping, CSV log.
-- `sample.py` — temperature / top-k / top-p generation that stops at EOS.
-- `export_int8.py` — llama2.c v2 int8 export with size, accuracy, and speed checks.
-- `esp32/` — ESP32-S3 firmware and a portable C inference engine.
-- `make_toy_corpus.py` — generate a tiny synthetic corpus to test the pipeline.
+- Train a small chat model in minutes on CPU or a few minutes on GPU.
+- Export a llama2.c v2 int8 file (2.83 MiB for the default preset).
+- Check the export in the real llama2.c C engine before flashing.
+- Deploy to an ESP32-S3 with a self-contained C inference engine and a serial
+  or OLED chat UI.
 
 ## Requirements
 
 - Python 3.10+
+- `pip`, plus `make` (optional but recommended)
+- `gcc` for `make verify` and `make test-c`
 - An ESP32-S3 with PSRAM for the on-device demo (optional)
+- PlatformIO CLI for the firmware build (optional)
+
+Set up the Python environment:
 
 ```bash
 python -m venv .venv
@@ -29,7 +32,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-The Makefile uses `python3` by default. To use the virtualenv interpreter:
+The Makefile uses `python3` by default. If you use a virtualenv elsewhere:
 
 ```bash
 make PYTHON=.venv/bin/python train
@@ -37,29 +40,50 @@ make PYTHON=.venv/bin/python train
 
 ## Quick start
 
-The repository already includes a demo corpus and tokenizer, so you can start
-training immediately:
+The repository already includes a demo corpus and tokenizer, so the fastest
+path is to train, sample, and export:
 
 ```bash
-make train                          # small preset -> out/small
+make train                          # train the small preset -> out/small
 make sample Q="What is PSRAM?"      # chat with out/small/best.pt
-make export                         # writes model_int8.bin
+make export                         # write model_int8.bin
 ```
 
-Run the whole pipeline from scratch:
+To rebuild the tokenizer and datasets first:
 
 ```bash
 make data                           # chat_corpus.txt -> data/
-make train                          # train the small preset
+make train
 make sample Q="What is PSRAM?"
 make export
 ```
 
-Run `make help` to see all targets.
+Run `make help` to list everything.
 
-## How it works
+## What each command does
 
-1. **Prepare data.** Put one training example per line:
+| Command | Description |
+|---|---|
+| `make data` | Train the SentencePiece tokenizer and write `train.bin`, `val.bin`, `tokenizer.bin`. |
+| `make train` | Train the selected preset and save `out/small/best.pt` plus a resumable checkpoint. |
+| `make sample` | Chat with the checkpoint using the prompt template. Override with `Q="..."`. |
+| `make export` | Convert the best checkpoint to llama2.c v2 int8 (`model_int8.bin`). |
+| `make verify` | Download, checksum, compile, and run the pinned llama2.c `runq.c` on your export. |
+| `make test` | Run the Python unit and end-to-end pipeline tests. |
+| `make test-c` | Also download and run the export in the C engine (needs `gcc` and network). |
+| `make clean` | Remove `out/`, `.runq/`, and Python caches. |
+
+Common overrides:
+
+```bash
+make train PRESET=nano OUT_DIR=out/nano
+make sample CKPT=out/nano/best.pt Q="What is int8?"
+make export CKPT=out/nano/best.pt MODEL=model_nano.bin
+```
+
+## Pipeline
+
+1. **Prepare data.** One training example per line:
 
    ```text
    User: What is PSRAM? Assistant: PSRAM is an external RAM chip ...
@@ -67,19 +91,27 @@ Run `make help` to see all targets.
 
    `prepare_data.py` trains the tokenizer on the training split only, writes
    `train.bin` / `val.bin`, and exports `tokenizer.bin` in llama2.c format.
-   Special tokens are `unk=0`, `bos=1`, `eos=2`.
+   Special tokens are fixed to `unk=0`, `bos=1`, `eos=2`.
 
 2. **Train.** `train.py` random-crops batches from a memory-mapped file,
    evaluates on a held-out split, and keeps the best checkpoint. Ctrl+C saves a
-   resumable checkpoint; `--resume` continues it.
+   resumable checkpoint; `make train` with `--resume` continues it:
+
+   ```bash
+   python train.py --data-dir data --preset small --out-dir out/small --resume
+   ```
 
 3. **Sample.** The prompt must match the training template. The default chat
    template is `User: {msg} Assistant:`. Use `--temperature 0` for greedy
-   decoding.
+   decoding, and `--top-k` / `--top-p` to control sampling.
 
 4. **Export.** `export_int8.py` writes the llama2.c version-2 int8 format:
    magic `ak42`, group size 32, fp32 norms, tied classifier, no biases. It
-   checks the file size and reports int8-vs-fp32 validation loss.
+   verifies the file size and reports int8-vs-fp32 validation loss.
+
+5. **Verify.** `verify_runq.sh` fetches a pinned `runq.c`, checks its SHA-256,
+   compiles it with `gcc`, and generates 60 greedy tokens on the desktop. This
+   catches format or layout mistakes before you flash a board.
 
 ## Presets
 
@@ -93,7 +125,7 @@ All presets use vocab 1024, context 128, and int8 group size 32.
 
 \*Memory-bandwidth estimate: every weight byte is read once per token at
 ~43 MB/s effective PSRAM bandwidth. Measure your board and pass
-`--bandwidth-mbs`.
+`--bandwidth-mbs` to `export_int8.py`.
 
 A small model needs a narrow dataset. A useful rule of thumb is ~20 training
 tokens per parameter. If your corpus is under a million tokens, keep the model
@@ -110,8 +142,34 @@ The bundled `small` preset on the demo corpus:
 | int8 file | 2.83 MiB |
 | KV cache (fp32, full 128-token context) | 576 KiB |
 | best validation loss | 0.3249 (ppl 1.38) |
+| desktop `runq.c` speed | ~470–695 tok/s |
 
 The training curve is in `results/log.csv`.
+
+## Testing
+
+```bash
+make test       # unit + end-to-end toy pipeline
+make test-c     # also download, compile, and run the pinned C engine
+```
+
+`make test` covers the forward pass, KV-cache decoding, int8 export size and
+layout, tokenizer format, and a complete prepare → train → sample → export
+pipeline on a toy corpus. `make test-c` is skipped unless `RUN_C_TEST=1`, which
+the target sets for you.
+
+## Using your own data
+
+`chat_corpus.txt` is a small synthetic chat corpus used for the demo. Replace it
+with your own one-example-per-line corpus and rerun `make data`. Make sure you
+have the right to redistribute any corpus you publish.
+
+If your corpus is tiny, generate a synthetic one to test the pipeline:
+
+```bash
+python make_toy_corpus.py toy_corpus.txt 4000
+python prepare_data.py --corpus toy_corpus.txt --vocab-size 512 --out-dir data
+```
 
 ## ESP32 deployment
 
@@ -164,29 +222,36 @@ probed automatically. Change `OLED_SDA`, `OLED_SCL`, and `OLED_ADDR` near the to
 of `main.cpp` if your module is wired differently. If no OLED is found, the
 firmware falls back to serial only.
 
-## Using your own data
-
-`chat_corpus.txt` is a small synthetic chat corpus used for the demo. Replace it
-with your own one-example-per-line corpus and rerun `make data`. Make sure you
-have the right to redistribute any corpus you publish.
-
-## Repository layout
+## Project layout
 
 ```text
 .
-├── chat_corpus.txt
+├── chat_corpus.txt        # demo corpus
 ├── data/                  # tokenizer + metadata (train/val .bin are generated)
 ├── esp32/                 # ESP32-S3 PlatformIO firmware + LittleFS data
 ├── results/log.csv        # training curve
-├── model.py
-├── prepare_data.py
-├── train.py
-├── sample.py
-├── export_int8.py
-├── make_toy_corpus.py
+├── tests/                 # unittest suite
+├── model.py               # transformer + KV-cache decode_step
+├── prepare_data.py        # tokenizer + train/val binaries
+├── train.py               # training loop
+├── sample.py              # text generation
+├── export_int8.py         # llama2.c v2 int8 export
+├── make_toy_corpus.py     # tiny synthetic corpus generator
+├── verify_runq.sh         # C-engine verification script
 ├── Makefile
 └── requirements.txt
 ```
+
+## Troubleshooting
+
+- **`ModuleNotFoundError: No module named 'torch'`** — activate the virtualenv
+  and run `pip install -r requirements.txt`.
+- **Empty or off-topic replies** — the prompt template must match the training
+  lines. The default is `User: {msg} Assistant:`.
+- **Validation loss rises while training loss falls** — the model is memorizing.
+  Use a smaller preset, add more data, or stop earlier.
+- **`make verify` fails on the download** — it needs `curl` and network access.
+  The script also requires `gcc`.
 
 ## Acknowledgements
 
