@@ -12,7 +12,6 @@ on-device C engine run the same forward pass.
 
 - Train a small chat model in minutes on CPU or a few minutes on GPU.
 - Export a llama2.c v2 int8 file (2.83 MiB for the default preset).
-- Check the export in the real llama2.c C engine before flashing.
 - Deploy to an ESP32-S3 with a self-contained C inference engine and a serial
   or OLED chat UI.
 
@@ -20,7 +19,7 @@ on-device C engine run the same forward pass.
 
 - Python 3.10+
 - `pip`, plus `make` (optional but recommended)
-- `gcc` for `make verify` and `make test-c`
+- `gcc` for `make test-c` (optional)
 - An ESP32-S3 with PSRAM for the on-device demo (optional)
 - PlatformIO CLI for the firmware build (optional)
 
@@ -68,10 +67,9 @@ Run `make help` to list everything.
 | `make train` | Train the selected preset and save `out/small/best.pt` plus a resumable checkpoint. |
 | `make sample` | Chat with the checkpoint using the prompt template. Override with `Q="..."`. |
 | `make export` | Convert the best checkpoint to llama2.c v2 int8 (`model_int8.bin`). |
-| `make verify` | Download, checksum, compile, and run the pinned llama2.c `runq.c` on your export. |
 | `make test` | Run the Python unit and end-to-end pipeline tests. |
 | `make test-c` | Also download and run the export in the C engine (needs `gcc` and network). |
-| `make clean` | Remove `out/`, `.runq/`, and Python caches. |
+| `make clean` | Remove `out/` and Python caches. |
 
 Common overrides:
 
@@ -108,10 +106,6 @@ make export CKPT=out/nano/best.pt MODEL=model_nano.bin
 4. **Export.** `export_int8.py` writes the llama2.c version-2 int8 format:
    magic `ak42`, group size 32, fp32 norms, tied classifier, no biases. It
    verifies the file size and reports int8-vs-fp32 validation loss.
-
-5. **Verify.** `verify_runq.sh` fetches a pinned `runq.c`, checks its SHA-256,
-   compiles it with `gcc`, and generates 60 greedy tokens on the desktop. This
-   catches format or layout mistakes before you flash a board.
 
 ## Presets
 
@@ -237,7 +231,6 @@ firmware falls back to serial only.
 ├── sample.py              # text generation
 ├── export_int8.py         # llama2.c v2 int8 export
 ├── make_toy_corpus.py     # tiny synthetic corpus generator
-├── verify_runq.sh         # C-engine verification script
 ├── Makefile
 └── requirements.txt
 ```
@@ -250,8 +243,6 @@ firmware falls back to serial only.
   lines. The default is `User: {msg} Assistant:`.
 - **Validation loss rises while training loss falls** — the model is memorizing.
   Use a smaller preset, add more data, or stop earlier.
-- **`make verify` fails on the download** — it needs `curl` and network access.
-  The script also requires `gcc`.
 
 ## Acknowledgements
 
